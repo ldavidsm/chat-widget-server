@@ -1,0 +1,34 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "chat-widget-server"
+version = "0.2.0"
+description = "FastAPI backend for @luisdsm/chat-widget: streaming, UI blocks, sessions, rate limits. Bring any LLM."
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "ldavidsm" }]
+requires-python = ">=3.10"
+keywords = ["chat", "widget", "agent", "anthropic", "claude", "fastapi", "sse"]
+
+# No provider SDK here on purpose: the core is provider-neutral, so someone
+# running GPT or Gemini installs this and writes their own agent.
+dependencies = [
+    "fastapi>=0.110",
+    "pydantic>=2.6",
+]
+
+[project.optional-dependencies]
+claude = ["anthropic>=1.11"]
+dev = ["anthropic>=1.11", "pytest>=8", "httpx>=0.27", "uvicorn[standard]>=0.27"]
+
+[project.urls]
+Homepage = "https://github.com/ldavidsm/chat-widget-server"
+Widget = "https://github.com/ldavidsm/chat-widget"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/chat_widget_server"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
