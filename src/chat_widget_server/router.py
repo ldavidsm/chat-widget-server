@@ -7,6 +7,7 @@ the same URL answers either Server-Sent Events or a single JSON object.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import uuid
@@ -39,18 +40,28 @@ def _sse(payload: dict[str, Any]) -> str:
     return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
 
-def _client_ip(request: Request, trust_forwarded_for: bool) -> str:
+def _client_ip(request: Request, trust_forwarded_for: bool, trusted_proxy_hops: int) -> str:
     """Best-effort caller identity for rate limiting.
 
     `X-Forwarded-For` is only read when you opt in: anyone can set that header,
     so trusting it without a proxy in front turns the IP limit into a header
     the caller chooses. Behind a proxy you do need it, or every request looks
     like the proxy and shares one bucket.
+
+    *Which* entry to read matters as much as whether to read it. A proxy
+    **appends** the address it saw, so the last entry is the only one your own
+    infrastructure wrote and everything before it is whatever the caller sent.
+    Reading the leftmost entry — the usual shortcut — hands the limit straight
+    back to the person being limited: `X-Forwarded-For: <random>` on every
+    request and the bucket is never the same twice. `trusted_proxy_hops` is how
+    many proxies you actually run, counted from the outside in.
     """
     if trust_forwarded_for:
         forwarded = request.headers.get("x-forwarded-for")
         if forwarded:
-            return forwarded.split(",")[0].strip()
+            hops = [hop.strip() for hop in forwarded.split(",") if hop.strip()]
+            if hops:
+                return hops[-min(max(trusted_proxy_hops, 1), len(hops))]
 
     return request.client.host if request.client else "unknown"
 
@@ -66,6 +77,8 @@ def create_router(
     limiter: Limiter | None = None,
     ip_limiter: Limiter | None = None,
     trust_forwarded_for: bool = False,
+    trusted_proxy_hops: int = 1,
+    heartbeat_seconds: float = 15.0,
     error_message: str = DEFAULT_ERROR,
     throttled_message: str = DEFAULT_THROTTLED,
 ) -> APIRouter:
@@ -83,6 +96,17 @@ def create_router(
     limiter, ip_limiter
         Swap in your own (anything with ``check(key) -> float | None``), e.g.
         Redis-backed, instead of the built-in windows.
+    trusted_proxy_hops
+        How many proxies sit in front of this app, counted from the outside in.
+        Only read when `trust_forwarded_for` is on — see `_client_ip` for why
+        the count is what keeps the IP limit honest.
+    heartbeat_seconds
+        How long a streaming turn may go without producing anything before a
+        keep-alive comment is written. A tool-calling turn is routinely quiet
+        for 20-40 seconds while the model thinks and the tools run, and nginx,
+        Cloudflare and most PaaS proxies close an SSE response that has gone
+        idle — the visitor then gets a half answer with no error anywhere.
+        Pass 0 to disable.
     """
     router = APIRouter()
     sessions = store if store is not None else MemorySessionStore()
@@ -102,7 +126,8 @@ def create_router(
 
     def _throttle(session_id: str, request: Request) -> float | None:
         if caller_limiter is not None:
-            wait = caller_limiter.check(f"ip:{_client_ip(request, trust_forwarded_for)}")
+            caller = _client_ip(request, trust_forwarded_for, trusted_proxy_hops)
+            wait = caller_limiter.check(f"ip:{caller}")
             if wait is not None:
                 return wait
         if session_limiter is not None:
@@ -148,8 +173,59 @@ def create_router(
 
         async def events() -> AsyncIterator[str]:
             streamed_any = False
+            apologized = False
+
+            # The agent runs in its own task feeding a queue rather than being
+            # iterated directly, so that a quiet stretch can be filled with a
+            # keep-alive instead of looking like a dead connection. See the
+            # `heartbeat_seconds` note on create_router.
+            queue: asyncio.Queue[tuple[str, Any]] = asyncio.Queue()
+
+            async def pump() -> None:
+                try:
+                    async for event in agent.stream(turn.message, history):
+                        await queue.put(("event", event))
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:  # handed over, not swallowed
+                    await queue.put(("error", exc))
+                finally:
+                    await queue.put(("end", None))
+
+            pumping = asyncio.create_task(pump())
+
             try:
-                async for event in agent.stream(turn.message, history):
+                while True:
+                    if heartbeat_seconds:
+                        try:
+                            kind, payload = await asyncio.wait_for(
+                                queue.get(), timeout=heartbeat_seconds
+                            )
+                        except asyncio.TimeoutError:
+                            # An SSE comment: it keeps proxies from calling the
+                            # connection idle, and the widget skips any line
+                            # starting with ':' so nothing reaches the thread.
+                            yield ": keepalive\n\n"
+                            continue
+                    else:
+                        kind, payload = await queue.get()
+
+                    if kind == "end":
+                        break
+
+                    if kind == "error":
+                        logger.error(
+                            "stream failed (session=%s)", session_id, exc_info=payload
+                        )
+                        # Only apologize if the visitor has not already seen an
+                        # answer start; we cannot retract what is on their screen.
+                        if not streamed_any and not apologized:
+                            yield _sse({"text": error_message})
+                            apologized = True
+                        continue
+
+                    event = payload
+
                     if await request.is_disconnected():
                         logger.info("visitor left mid-answer (session=%s)", session_id)
                         return
@@ -167,20 +243,19 @@ def create_router(
                         )
                         if not streamed_any:
                             yield _sse({"text": error_message})
+                            apologized = True
 
                     elif isinstance(event, Completed):
-                        if not streamed_any and not event.blocks:
+                        # `apologized` matters here: a refusal is followed by a
+                        # Completed carrying no text, and without the flag the
+                        # visitor reads the same apology twice.
+                        if not streamed_any and not event.blocks and not apologized:
                             yield _sse({"text": error_message})
+                            apologized = True
                         _log_usage(event)
                         await sessions.save(session_id, event.messages)
-
-            except Exception:
-                logger.exception("stream failed (session=%s)", session_id)
-                # Only apologize if the visitor has not already seen an answer
-                # start; we cannot retract what is on their screen.
-                if not streamed_any:
-                    yield _sse({"text": error_message})
             finally:
+                pumping.cancel()
                 yield "data: [DONE]\n\n"
 
         return StreamingResponse(events(), media_type="text/event-stream", headers=SSE_HEADERS)

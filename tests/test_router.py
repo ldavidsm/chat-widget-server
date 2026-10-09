@@ -1,5 +1,6 @@
 """Router tests against a stubbed agent — no API key, no network."""
 
+import asyncio
 import json
 
 import pytest
@@ -307,3 +308,92 @@ def test_a_custom_limiter_can_replace_the_built_in_one():
     )
     assert response.status_code == 429
     assert response.headers["Retry-After"] == "8"
+
+
+def test_a_refusal_apologizes_once_not_twice():
+    # Regression: a refusal is followed by a Completed carrying no text, and
+    # both branches wrote the apology — the visitor read it twice.
+    agent = StubAgent(events=[Refused(category="cyber"), Completed(text="")])
+    body = client_for(agent).post("/chat", json={"message": "hey"}, headers=SSE).text
+
+    texts = [json.loads(f)["text"] for f in frames(body) if f != "[DONE]"]
+    assert len(texts) == 1, f"the visitor reads the apology {len(texts)} times"
+
+
+def test_a_quiet_turn_is_kept_alive():
+    # A tool-calling turn is routinely silent for half a minute while the model
+    # thinks and the tools run. Nothing on the wire and the proxy in front
+    # closes the response, which reaches the visitor as a truncated answer with
+    # no error anywhere.
+    class Slow(StubAgent):
+        async def stream(self, message, history=None):
+            await asyncio.sleep(0.2)
+            yield TextChunk("por fin")
+            yield Completed(text="por fin")
+
+    body = (
+        client_for(Slow(), heartbeat_seconds=0.05)
+        .post("/chat", json={"message": "hey"}, headers=SSE)
+        .text
+    )
+
+    assert ": keepalive" in body
+    # And a keep-alive must never surface as a message in the thread.
+    assert [json.loads(f) for f in frames(body) if f != "[DONE]"] == [{"text": "por fin"}]
+
+
+def test_the_heartbeat_can_be_switched_off():
+    body = (
+        client_for(StubAgent(), heartbeat_seconds=0)
+        .post("/chat", json={"message": "hey"}, headers=SSE)
+        .text
+    )
+    assert ": keepalive" not in body
+    assert frames(body)[-1] == "[DONE]"
+
+
+def test_forwarded_for_reads_the_hop_the_proxy_appended():
+    # Behind a proxy the header reads "<what the caller sent>, <what the proxy
+    # saw>". Reading the leftmost entry lets one caller rotate buckets forever
+    # by changing a header they control, which defeats the IP limit entirely.
+    client = client_for(
+        StubAgent(), max_per_minute=0, max_per_minute_per_ip=1, trust_forwarded_for=True
+    )
+
+    first = client.post(
+        "/chat",
+        json={"message": "x", "sessionId": "s1"},
+        headers={"x-forwarded-for": "1.1.1.1, 203.0.113.9"},
+    )
+    second = client.post(
+        "/chat",
+        json={"message": "x", "sessionId": "s2"},
+        headers={"x-forwarded-for": "2.2.2.2, 203.0.113.9"},
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 429, "one real caller, not two"
+
+
+def test_more_than_one_proxy_can_be_declared():
+    client = client_for(
+        StubAgent(),
+        max_per_minute=0,
+        max_per_minute_per_ip=1,
+        trust_forwarded_for=True,
+        trusted_proxy_hops=2,
+    )
+
+    first = client.post(
+        "/chat",
+        json={"message": "x", "sessionId": "s1"},
+        headers={"x-forwarded-for": "1.1.1.1, 198.51.100.4, 203.0.113.9"},
+    )
+    second = client.post(
+        "/chat",
+        json={"message": "x", "sessionId": "s2"},
+        headers={"x-forwarded-for": "9.9.9.9, 198.51.100.4, 203.0.113.9"},
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 429, "the second hop from the outside is the caller"
