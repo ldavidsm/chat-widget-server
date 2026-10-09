@@ -8,10 +8,15 @@ silently ignored block in someone's browser.
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timedelta
 from typing import Any, Iterable, Sequence
 
 Block = dict[str, Any]
+
+#: A date *and time* carrying no offset and no trailing Z. A date on its own is
+#: unambiguous and passes; anything with "+02:00" or "Z" passes.
+_NAIVE_DATETIME = re.compile(r"^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?$")
 
 __all__ = ["Block", "slot", "calendar", "cards", "quick_replies"]
 
@@ -19,12 +24,22 @@ __all__ = ["Block", "slot", "calendar", "cards", "quick_replies"]
 def _isoformat(value: datetime | str, *, field: str) -> str:
     """Serialize an instant, refusing anything the browser would misread.
 
-    A naive datetime is the one mistake that produces a wrong answer with no
-    error anywhere: the browser reads an offset-less string as the *viewer's*
-    local time, so a customer in another timezone is shown — and books — the
-    wrong hour. We make it loud here instead.
+    An offset-less instant is the one mistake that produces a wrong answer with
+    no error anywhere: the browser reads it as the *viewer's* local time, so a
+    customer in another timezone is shown — and books — the wrong hour. We make
+    it loud here instead, for a datetime object and for a string alike.
     """
     if isinstance(value, str):
+        # A string is the common path — rows come out of a database driver
+        # already formatted — and letting it through unchecked left the exact
+        # hole this function exists to close.
+        if _NAIVE_DATETIME.match(value):
+            raise ValueError(
+                f"{field} is a datetime with no offset ({value!r}). The browser would "
+                "read it as the viewer's local time, not your business's. Append the "
+                "offset ('2026-10-07T10:00:00+02:00'), or pass an aware datetime and "
+                "let slot() format it."
+            )
         return value
 
     if value.tzinfo is None or value.tzinfo.utcoffset(value) is None:

@@ -71,3 +71,25 @@ def test_cards_and_quick_replies_shapes():
 def test_empty_blocks_are_a_mistake_not_a_no_op(builder):
     with pytest.raises(ValueError):
         builder([])
+
+
+def test_slot_refuses_a_naive_datetime_string():
+    # The string path is the common one — rows arrive already formatted — and
+    # it used to bypass the very check this exists for.
+    with pytest.raises(ValueError, match="no offset"):
+        blocks.slot("2026-10-07T10:00:00")
+
+
+@pytest.mark.parametrize("value", [
+    "2026-10-07T10:00:00+02:00",
+    "2026-10-07T10:00:00Z",
+    "2026-10-07T08:00:00.123+00:00",
+    "2026-10-07",
+])
+def test_slot_accepts_strings_that_cannot_be_misread(value):
+    assert blocks.slot(value)["start"] == value
+
+
+def test_slot_refuses_a_naive_end_string():
+    with pytest.raises(ValueError, match="no offset"):
+        blocks.slot("2026-10-07T10:00:00+02:00", end="2026-10-07T11:00:00")
