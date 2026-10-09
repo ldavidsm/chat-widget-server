@@ -18,7 +18,7 @@ class HistoryEntry(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     role: Literal["user", "assistant"]
-    content: str
+    content: str = Field(max_length=8000)
 
 
 class ChatTurn(BaseModel):
@@ -30,7 +30,11 @@ class ChatTurn(BaseModel):
     session_id: str | None = Field(default=None, alias="sessionId", max_length=128)
     # Client-supplied history is ignored unless the store is told to trust it:
     # a browser can forge assistant turns, which is a prompt-injection channel.
-    history: list[HistoryEntry] = Field(default_factory=list)
+    #
+    # Bounded even so. Ignoring a field is not the same as not parsing it: an
+    # unbounded list is validated into memory before the route — and therefore
+    # before the rate limiter — ever sees the request.
+    history: list[HistoryEntry] = Field(default_factory=list, max_length=100)
     timestamp: str | None = None
 
 

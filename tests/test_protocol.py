@@ -40,3 +40,21 @@ def test_reply_payload_matches_what_the_widget_reads():
 def test_quick_replies_are_serialized_camelcase_and_dropped_when_unset():
     assert "quickReplies" not in ChatReply(reply="x").to_payload()
     assert ChatReply(reply="x", quick_replies=["Yes"]).to_payload()["quickReplies"] == ["Yes"]
+
+
+def test_history_is_bounded():
+    # Ignored is not the same as unparsed: the list is validated into memory
+    # before the route, and so before the rate limiter, sees the request.
+    with pytest.raises(ValidationError):
+        ChatTurn.model_validate({
+            "message": "hola",
+            "history": [{"role": "user", "content": "x"}] * 101,
+        })
+
+
+def test_a_history_entry_is_bounded_too():
+    with pytest.raises(ValidationError):
+        ChatTurn.model_validate({
+            "message": "hola",
+            "history": [{"role": "user", "content": "x" * 8001}],
+        })
