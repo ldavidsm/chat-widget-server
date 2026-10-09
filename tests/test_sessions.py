@@ -52,3 +52,48 @@ def test_session_count_is_bounded():
     for i in range(10):
         run(store.save(f"s{i}", [{"role": "user", "content": "x"}]))
     assert len(store._data) <= 3
+
+
+def test_trimming_never_orphans_a_tool_result():
+    # Regression: a tool_result travels as a `user` message, so checking the
+    # role alone let the cut land on one. The provider then rejects the whole
+    # request — every later message in that session fails until it expires.
+    # Two tool rounds per turn is six messages, which is what the default
+    # max_turns cut through.
+    store = MemorySessionStore()
+    messages = []
+    for i in range(12):
+        messages.append({"role": "user", "content": f"q{i}"})
+        for call in range(2):
+            messages.append(
+                {"role": "assistant", "content": [{"type": "tool_use", "id": f"t{i}{call}"}]}
+            )
+            messages.append(
+                {"role": "user", "content": [{"type": "tool_result", "tool_use_id": f"t{i}{call}"}]}
+            )
+        messages.append({"role": "assistant", "content": [{"type": "text", "text": f"a{i}"}]})
+
+    run(store.save("s1", messages))
+    first = run(store.load("s1"))[0]
+
+    assert first["role"] == "user"
+    assert isinstance(first["content"], str), "a history cannot open on a tool result"
+
+
+def test_trimming_survives_sdk_content_objects():
+    # Assistant turns are stored as the SDK handed them over, so the blocks are
+    # objects with a `.type`, not dicts.
+    class Block:
+        def __init__(self, type):
+            self.type = type
+
+    store = MemorySessionStore(max_turns=1)
+    run(store.save("s1", [
+        {"role": "user", "content": "q"},
+        {"role": "assistant", "content": [Block("tool_use")]},
+        {"role": "user", "content": [Block("tool_result")]},
+        {"role": "assistant", "content": [Block("text")]},
+    ]))
+
+    kept = run(store.load("s1"))
+    assert kept == [] or isinstance(kept[0]["content"], str)

@@ -17,6 +17,31 @@ from typing import Any, Protocol
 Messages = list[dict[str, Any]]
 
 
+def _block_type(block: Any) -> str | None:
+    """The `type` of a content block, whether it is a dict or an SDK object."""
+    if isinstance(block, dict):
+        return block.get("type")
+    return getattr(block, "type", None)
+
+
+def _opens_a_turn(message: dict[str, Any]) -> bool:
+    """True when a stored history may legally begin at this message.
+
+    The role alone is not enough. A tool result also travels as a `user`
+    message, so a cut that lands on one leaves it orphaned from the `tool_use`
+    that asked for it, and the provider rejects the entire request. With a tool
+    loop a turn is four or six messages rather than two, so the cut lands on a
+    tool result routinely — including at the default `max_turns`.
+    """
+    if message.get("role") != "user":
+        return False
+
+    content = message.get("content")
+    if isinstance(content, (list, tuple)):
+        return not any(_block_type(block) == "tool_result" for block in content)
+    return True
+
+
 class SessionStore(Protocol):
     """Anything that can remember a conversation."""
 
@@ -31,6 +56,10 @@ class MemorySessionStore:
     Not for multi-process deployments, and it loses everything on restart —
     which is also why `max_turns` matters less than it looks: the cap is there
     to bound the prompt, not the memory.
+
+    `max_turns` counts user/assistant pairs, so a tool-calling agent (four or
+    six messages per turn) keeps fewer turns than the number suggests. The cut
+    itself is always safe — see `_opens_a_turn`.
     """
 
     def __init__(self, *, max_turns: int = 20, ttl_seconds: int = 60 * 60 * 6, max_sessions: int = 10_000):
@@ -50,7 +79,7 @@ class MemorySessionStore:
         # Keep whole turns: cutting between an assistant tool_use and its
         # tool_result makes the next request invalid.
         trimmed = messages[-(self.max_turns * 2) :] if self.max_turns else messages
-        while trimmed and trimmed[0].get("role") != "user":
+        while trimmed and not _opens_a_turn(trimmed[0]):
             trimmed = trimmed[1:]
 
         self._data[session_id] = (time.monotonic(), trimmed)
