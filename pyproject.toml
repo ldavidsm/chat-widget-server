@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "chat-widget-server"
-version = "0.2.0"
+version = "0.3.0"
 description = "FastAPI backend for @luisdsm/chat-widget: streaming, UI blocks, sessions, rate limits. Bring any LLM."
 readme = "README.md"
 license = { text = "MIT" }
