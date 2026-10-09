@@ -174,10 +174,12 @@ blocks.slot(
 )
 ```
 
-**`slot()` refuses a naive datetime, on purpose.** An instant with no offset is
-read by the browser as the *viewer's* local time, not your business's — so a
-customer in another country is shown, and books, the wrong hour, with no error
-anywhere. Attach a timezone and the problem disappears.
+**`slot()` refuses an instant with no offset, on purpose** — a `datetime`
+without a timezone and a string like `"2026-10-07T10:00:00"` alike. The browser
+reads an offset-less instant as the *viewer's* local time, not your business's,
+so a customer in another country is shown, and books, the wrong hour, with no
+error anywhere. Attach a timezone and the problem disappears. A date on its own
+(`"2026-10-07"`) carries no hour to misread and passes.
 
 ## The Agent
 
@@ -307,6 +309,7 @@ create_router(
     max_per_minute=15,          # per session
     max_per_minute_per_ip=40,   # per caller, catches rotating session ids
     trust_forwarded_for=False,  # see below
+    trusted_proxy_hops=1,       # how many proxies you actually run
 )
 ```
 
@@ -324,6 +327,29 @@ Two things worth knowing:
   `X-Forwarded-For`, so trusting it without a proxy in front turns the IP limit
   into a value the caller chooses. Behind a proxy you do need it on, or every
   request looks like the proxy and shares one bucket.
+- **With it on, `trusted_proxy_hops` is what keeps it honest.** A proxy
+  *appends* the address it saw, so the header reads
+  `<whatever the caller sent>, <what your proxy saw>`. Only the last entry was
+  written by your own infrastructure. Reading the first one — the usual
+  shortcut — lets one caller rotate buckets forever by varying a header they
+  control. Set the count to the number of proxies in front of the app.
+
+### Keeping a slow turn alive
+
+A tool-calling turn goes quiet for twenty to forty seconds while the model
+thinks and the tools run. With nothing on the wire, nginx, Cloudflare and most
+PaaS proxies decide the SSE response is idle and close it — which reaches the
+visitor as an answer that stops mid-sentence, with no error logged anywhere.
+
+The route writes an SSE comment every 15 seconds to prevent that. The widget
+ignores any line starting with `:`, so nothing reaches the thread.
+
+```python
+create_router(agent, heartbeat_seconds=15.0)   # 0 disables it
+```
+
+Raise it if your proxy is patient, lower it if it is not; one comment per
+visitor per 15 seconds costs nothing.
 
 ## Before you go live
 

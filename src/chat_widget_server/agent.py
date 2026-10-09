@@ -72,6 +72,13 @@ class ClaudeAgent:
             today's date or the visitor's name into it puts volatile text at
             the front of the prefix and invalidates everything after it on
             every request. Pass that kind of context in the message instead.
+
+            The prefix also has to clear a per-model minimum, and below it
+            nothing caches — silently, with no error and
+            ``cache_creation_input_tokens: 0``. Claude Opus 5 asks for 512
+            tokens, Sonnet 5 for 1024, Haiku 4.5 for 4096, so changing `model`
+            can switch caching off while every request still succeeds. Watch
+            `Usage.cache_read` after any change: a flat zero is the symptom.
         """
         self.tools = list(tools)
         self.system = system
@@ -124,8 +131,14 @@ class ClaudeAgent:
     ) -> AsyncIterator[TextChunk | BlockEmitted | Refused | Completed]:
         """Run one turn, yielding events as they happen.
 
-        Always ends with exactly one `Completed` (or a `Refused` followed by
+        Ends with exactly one `Completed` (or a `Refused` followed by
         `Completed`), so a consumer can rely on that to close its stream.
+
+        The one exception is an exception: if the provider call itself fails —
+        network, 429, 5xx — it propagates instead, and no `Completed` arrives.
+        The caller has to handle that separately, because a turn that never
+        completed is also a turn whose history was never persisted. `router`
+        catches it and apologizes to the visitor.
         """
         # Our own mirror of the conversation: the runner keeps a private copy
         # and never exposes it, and we need it for the session store.
