@@ -10,6 +10,7 @@ agent loop, the streaming and the blocks are real.
 
 from __future__ import annotations
 
+import logging
 import os
 from datetime import datetime
 
@@ -131,4 +132,12 @@ if __name__ == "__main__":
 
     import uvicorn
 
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    # Without this the usage line the router logs after every turn is invisible:
+    # uvicorn configures only its own loggers, so an INFO record from
+    # `chat_widget_server` propagates to a root logger with no handler and is
+    # dropped. Those are the numbers you want while testing — `cache_read`
+    # climbing means the prompt cache is working, flat zero means something is
+    # rewriting the prefix on every request.
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s:   %(message)s")
+
+    uvicorn.run(app, host="127.0.0.1", port=8000, log_level="info")

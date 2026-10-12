@@ -220,7 +220,19 @@ the message instead.
 
 Watch `cache_read` in the logs to confirm it is working: in a healthy
 conversation it grows with each turn while `cache_write` stays small. Stuck at
-zero means something is rewriting the prefix.
+zero means something is rewriting the prefix — or that `model` was changed to one
+with a higher minimum cacheable prefix (512 tokens on Claude Opus 5, 1024 on
+Sonnet 5, 4096 on Haiku 4.5; below it nothing caches and nothing errors).
+
+**You have to turn the logs on to see any of this.** Being a library, this
+package never configures logging — and uvicorn sets up only its own loggers, so
+an `INFO` record from `chat_widget_server` propagates to a root logger with no
+handler and is dropped. One line in your entrypoint, as both examples do:
+
+```python
+import logging
+logging.basicConfig(level=logging.INFO)
+```
 
 Outside FastAPI, drive it directly:
 

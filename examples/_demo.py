@@ -8,7 +8,10 @@ from zoneinfo import ZoneInfo
 from chat_widget_server import blocks
 
 MADRID = ZoneInfo("Europe/Madrid")
-WIDGET = "https://cdn.jsdelivr.net/npm/@luisdsm/chat-widget@0.3.0/dist/chat-widget.js"
+# Rango, no versión exacta: la corrección del timeout de 0.3.1 importa aquí, porque
+# un turno con herramienta y el modelo pensando se pasa de los 60 s que la 0.3.0
+# aplicaba a la respuesta entera.
+WIDGET = "https://cdn.jsdelivr.net/npm/@luisdsm/chat-widget@0.3/dist/chat-widget.js"
 
 SERVICES = {
     "limpieza facial": {"price": 45, "minutes": 60, "category": "facial"},

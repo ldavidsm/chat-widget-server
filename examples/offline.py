@@ -66,7 +66,13 @@ async def home() -> str:
 
 
 if __name__ == "__main__":
+    import logging
+
     import uvicorn
+
+    # See the note in clinic.py: without this the router's per-turn usage line
+    # never reaches the terminal.
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s:   %(message)s")
 
     print("\n  Demo sin API key → http://localhost:8000\n")
     uvicorn.run(app, host="127.0.0.1", port=8000)
