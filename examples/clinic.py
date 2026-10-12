@@ -22,6 +22,12 @@ from _demo import MADRID, SERVICES, openings, page, service_cards
 
 BOOKINGS: list[dict] = []
 
+# Every tool logs the arguments it was handed. The point of running this example
+# is to find out whether the model picks the right tool and fills it in
+# correctly, and that is the only place it shows. The router logs the token
+# usage of the turn; this logs the decision inside it.
+log = logging.getLogger("clinica")
+
 
 # ── Tools ────────────────────────────────────────────────
 
@@ -33,6 +39,7 @@ async def list_services(category: str | None = None) -> str:
     Args:
         category: Optional filter — facial, masaje, manos.
     """
+    log.info("🔧 list_services(category=%r)", category)
     items = service_cards(category)
     if not items:
         return f"No hay tratamientos en la categoría {category!r}."
@@ -49,6 +56,7 @@ async def check_availability(service: str, days_ahead: int = 14) -> str:
         service: Treatment name, exactly as listed by list_services.
         days_ahead: How many days forward to look. Defaults to 14.
     """
+    log.info("🔧 check_availability(service=%r, days_ahead=%r)", service, days_ahead)
     key = service.strip().lower()
     if key not in SERVICES:
         return f"No existe el tratamiento {service!r}. Los disponibles son: {', '.join(SERVICES)}."
@@ -71,6 +79,10 @@ async def book_appointment(service: str, when: str, customer_name: str) -> str:
         when: Start of the appointment as an ISO 8601 datetime with offset.
         customer_name: Who the appointment is for.
     """
+    log.info(
+        "🔧 book_appointment(service=%r, when=%r, customer_name=%r)",
+        service, when, customer_name,
+    )
     key = service.strip().lower()
     if key not in SERVICES:
         return f"No existe el tratamiento {service!r}."
