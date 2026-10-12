@@ -20,6 +20,8 @@ from chat_widget_server import Agent, blocks, create_app, emit_block, tool
 
 from _demo import MADRID, SERVICES, openings, page, service_cards
 
+DIAS = ("lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo")
+
 BOOKINGS: list[dict] = []
 
 # Every tool logs the arguments it was handed. The point of running this example
@@ -67,7 +69,23 @@ async def check_availability(service: str, days_ahead: int = 14) -> str:
 
     # Text for the model, calendar for the visitor.
     emit_block(blocks.calendar(service=key.title(), slots=slots, title="Elige tu fecha"))
-    return f"{len(slots)} huecos disponibles para {key} en los próximos {days_ahead} días."
+
+    # What this returns is what the model reads, and a bare count leaves it
+    # unable to answer "do you have anything on Sunday?" — in the first real
+    # run it invited the visitor to pick a Sunday that does not exist, because
+    # it never learned which days were on offer. Give it the days.
+    per_day: dict[str, int] = {}
+    for opening in slots:
+        per_day[opening["start"][:10]] = per_day.get(opening["start"][:10], 0) + 1
+
+    listing = ", ".join(
+        f"{DIAS[datetime.fromisoformat(day).weekday()]} {day} ({count})"
+        for day, count in per_day.items()
+    )
+    return (
+        f"{len(slots)} huecos para {key} en los próximos {days_ahead} días. "
+        f"Días con hueco: {listing}. La clínica cierra los domingos."
+    )
 
 
 @tool
@@ -76,8 +94,12 @@ async def book_appointment(service: str, when: str, customer_name: str) -> str:
 
     Args:
         service: Treatment name.
-        when: Start of the appointment as an ISO 8601 datetime with offset.
-        customer_name: Who the appointment is for.
+        when: Start of the appointment as an ISO 8601 datetime with offset,
+            including the year — read it off the slot the visitor picked, never
+            from memory.
+        customer_name: The visitor's own name. Never the professional attending
+            them: a picked slot reads "with Marta Ruiz", and Marta is staff.
+            Ask the visitor for their name if they have not given it.
     """
     log.info(
         "🔧 book_appointment(service=%r, when=%r, customer_name=%r)",
@@ -95,6 +117,16 @@ async def book_appointment(service: str, when: str, customer_name: str) -> str:
     if at.tzinfo is None:
         return "Esa fecha no lleva zona horaria. Añade el offset, p.ej. +02:00."
 
+    # A wrong year parses perfectly and books an appointment in the past with
+    # every other field plausible. It happened on the very first real run: the
+    # slot was 2026 and the model wrote 2025. Cheap to catch, invisible if not.
+    now = datetime.now(MADRID)
+    if at < now:
+        return (
+            f"Esa fecha ya pasó: {at.astimezone(MADRID):%d/%m/%Y a las %H:%M}. "
+            f"Hoy es {now:%d/%m/%Y}. Revisa el año y vuelve a intentarlo."
+        )
+
     BOOKINGS.append({"service": key, "when": at.isoformat(), "name": customer_name})
     pretty = at.astimezone(MADRID).strftime("%d/%m/%Y a las %H:%M")
     return f"Cita confirmada: {key} el {pretty} para {customer_name}. Referencia #{len(BOOKINGS)}."
@@ -109,7 +141,11 @@ agent = Agent(
         "en tono cálido y breve: dos o tres frases como máximo.\n\n"
         "Usa las herramientas para responder con datos reales — nunca te inventes "
         "precios ni disponibilidad. Para reservar necesitas el tratamiento, la fecha "
-        "exacta y el nombre de la persona; si falta alguno, pídelo.\n\n"
+        "exacta y el nombre de quien viene; si falta alguno, pídelo.\n\n"
+        "Dos cosas que se confunden con facilidad. El profesional que aparece en un "
+        "hueco («con Marta Ruiz») es de la clínica, no es el cliente: nunca reserves "
+        "a su nombre. Y la fecha de un hueco incluye el año — cópialo tal cual, no lo "
+        "deduzcas.\n\n"
         "Cuando una herramienta ya ha mostrado un calendario o unas tarjetas, no "
         "repitas la lista en texto: comenta brevemente y deja que la vea."
     ),
