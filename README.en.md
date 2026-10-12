@@ -59,7 +59,7 @@ uvicorn main:app --reload
 On the page:
 
 ```html
-<script src="https://cdn.jsdelivr.net/npm/@luisdsm/chat-widget@0.3.1/dist/chat-widget.js"
+<script src="https://cdn.jsdelivr.net/npm/@luisdsm/chat-widget@0.3.2/dist/chat-widget.js"
         data-endpoint="https://api.my-clinic.com/chat"
         data-stream="true"
         async></script>
