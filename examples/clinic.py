@@ -56,7 +56,10 @@ async def check_availability(service: str, days_ahead: int = 14) -> str:
 
     Args:
         service: Treatment name, exactly as listed by list_services.
-        days_ahead: How many days forward to look. Defaults to 14.
+        days_ahead: How many days forward to look. Defaults to 14, which only
+            reaches a fortnight — widen it when the visitor asks about a date
+            further out ("next month", a named month) instead of answering that
+            there is nothing: 60 covers two months, 90 three.
     """
     log.info("🔧 check_availability(service=%r, days_ahead=%r)", service, days_ahead)
     key = service.strip().lower()
