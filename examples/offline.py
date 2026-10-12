@@ -46,7 +46,12 @@ agent = ScriptedAgent(
     ),
 )
 
-app = create_app(agent, allowed_origins=["http://localhost:8000"], title="Clínica demo (offline)")
+# Ver la nota en clinic.py: localhost y 127.0.0.1 no son el mismo origen.
+app = create_app(
+    agent,
+    allowed_origins=["http://localhost:8000", "http://127.0.0.1:8000"],
+    title="Clínica demo (offline)",
+)
 
 NOTE = (
     "<strong>Modo sin API.</strong> No hay modelo detrás y no se gasta nada: las respuestas "

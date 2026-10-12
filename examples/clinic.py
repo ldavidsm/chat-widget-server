@@ -115,7 +115,13 @@ agent = Agent(
     ),
 )
 
-app = create_app(agent, allowed_origins=["http://localhost:8000"], title="Clínica demo")
+# localhost y 127.0.0.1 son orígenes distintos para el navegador, y uvicorn
+# escucha en la segunda — así que es la que uno acaba escribiendo. Con solo una
+# de las dos permitida, el preflight de CORS devuelve un 400 antes de llegar al
+# agente, y el síntoma (OPTIONS /chat 400) no se parece en nada a su causa.
+LOCAL_ORIGINS = ["http://localhost:8000", "http://127.0.0.1:8000"]
+
+app = create_app(agent, allowed_origins=LOCAL_ORIGINS, title="Clínica demo")
 
 NOTE = (
     "El widget de abajo a la derecha habla con <code>POST /chat</code> de este mismo "
